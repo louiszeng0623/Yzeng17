@@ -1,0 +1,38 @@
+name: Update schedule
+
+on:
+  schedule:
+    - cron: '0 20 * * *'   # 每天 UTC 20 点运行（北京时间次日 04:00）
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Install dependencies
+        run: pip install requests beautifulsoup4 pytz
+
+      - name: Fetch latest schedules
+        run: python scripts/fetch_schedule.py
+
+      - name: Build calendar
+        run: python scripts/build_ics.py
+
+      - name: Commit and push if changed
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add data/*.csv calendar.ics
+          if git diff-index --quiet HEAD; then
+            echo "No changes"
+          else
+            git commit -m "Update schedules"
+            git push
+          fi
