@@ -36,6 +36,6 @@ jobs:
           if git diff-index --quiet HEAD; then
             echo "No changes"
           else
-            git commit -m "Update schedules"
+           git commit -m "Update schedules"
             git push
           fi
