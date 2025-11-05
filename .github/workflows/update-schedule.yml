@@ -23,15 +23,18 @@ jobs:
           pip install pandas playwright
           playwright install chromium
 
-      - name: Fetch schedule (Playwright)
+      - name: Fetch schedules with Playwright
         run: |
           python3 << 'EOF'
           from playwright.sync_api import sync_playwright
           import pandas as pd
+          import os
+
+          os.makedirs("data", exist_ok=True)
 
           teams = [
               ("chengdu", "https://data.zhibo8.cc/html/team.html?match=&team=%E6%88%90%E9%83%BD%E8%93%89%E5%9F%8E"),
-              ("inter", "https://data.zhibo8.cc/html/team.html?match=&team=%E5%9B%BD%E9%99%85%E7%B1%B3%E5%85%B0"),
+              ("inter",   "https://data.zhibo8.cc/html/team.html?match=&team=%E5%9B%BD%E9%99%85%E7%B1%B3%E5%85%B0"),
           ]
 
           with sync_playwright() as p:
@@ -40,39 +43,56 @@ jobs:
 
               for filename, url in teams:
                   page.goto(url, wait_until="networkidle")
-
-                  # 点击“赛程”tab
                   page.click("text=赛程")
                   page.wait_for_load_state("networkidle")
 
-                  # 选中可见的赛程表
                   table = page.query_selector("table.table-lists:not([style*='display: none'])")
                   rows = table.query_selector_all("tbody tr")
 
                   data = []
                   for row in rows:
-                      cols = [c.inner_text().strip() for c in row.query_selector_all("td")]
-                      if len(cols) >= 7:
-                          date_time = cols[0]
-                          home = cols[1]
-                          league = cols[3]
-                          score = cols[4]
-                          away = cols[6]
-                          data.append([date_time, league, home, score, away])
+                      tds = row.query_selector_all("td")
+                      if len(tds) < 7:
+                          continue
+                      cols = [c.inner_text().strip() for c in tds]
+                      # 结构：0 日期时间  1 主队  3 赛事  4 比分  6 客队  （其余是队徽/星期）
+                      date_time = cols[0]
+                      home      = cols[1]
+                      league    = cols[3]
+                      score     = cols[4]
+                      away      = cols[6]
+                      data.append([date_time, league, home, score, away])
 
-                  df = pd.DataFrame(data, columns=["日期时间", "赛事", "主队", "比分", "客队"])
+                  df = pd.DataFrame(data, columns=["日期时间","赛事","主队","比分","客队"])
                   df.to_csv(f"data/{filename}.csv", index=False, encoding="utf-8-sig")
 
               browser.close()
 
-          print("✅ 成功：成都蓉城 & 国际米兰 赛程已更新")
+          print("✅ CSV 已生成：data/chengdu.csv, data/inter.csv")
           EOF
 
-      - name: Commit and push
+      - name: Build ICS from CSV and publish to docs/
         run: |
-          git config user.name "Louis Zeng Bot"
-          git config user.email "actions@github.com"
-          git add data/*.csv || true
-          git commit -m "Auto update schedule" || true
-          git push
+          python3 << 'EOF'
+          import csv, os, re, datetime as dt
+          from pathlib import Path
 
+          TZ = "Asia/Shanghai"
+          now = dt.datetime.now()
+
+          srcs = [
+              ("data/chengdu.csv", "成都蓉城赛程"),
+              ("data/inter.csv",   "国际米兰赛程"),
+          ]
+
+          def guess_year(month: int) -> int:
+              # 赛季跨年时的保守策略：若月份比当前月小很多（>6），认为是下一年
+              y = now.year
+              if month < (now.month - 6):
+                  return y + 1
+              return y
+
+          def parse_dt(s: str) -> dt.datetime | None:
+              # 输入格式形如 "05-02 19:35" 或 "05-02 19:35\n"
+              s = s.strip()
+              m
