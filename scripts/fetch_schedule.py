@@ -21,7 +21,7 @@ TEAMS = {
 
 def fetch_team_schedule(team_id: int):
     """从懂球帝API获取指定球队的未来赛程"""
-    url = f"https://api.dongqiudi.com/v1/team/schedule?team_id={team_id}"
+    url = f"https://api.dongqiudi.com/v3/team/schedule/list?team_id={team_id}"
     r = requests.get(url, headers=HEADERS, timeout=20)
     r.raise_for_status()
     data = r.json()
