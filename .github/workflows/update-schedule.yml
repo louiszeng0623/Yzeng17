@@ -1,3 +1,28 @@
+name: Update Football Calendar (Full Auto Version)
+
+on:
+  schedule:
+    - cron: "0 */6 * * *"   # 每6小时自动更新
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          pip install requests pandas playwright
+          playwright install chromium
+
       - name: Fetch schedule (Playwright)
         run: |
           python3 << 'EOF'
@@ -18,12 +43,12 @@
                   # 点击赛程 Tab
                   page.click("text=赛程")
 
-                  # 等待 Ajax 加载
+                  # 等待赛程表加载并且可见
                   page.wait_for_selector("table.table-lists tbody tr", timeout=60000)
 
-                  # 提取可见(未隐藏)的赛程表
-                  visible_table = page.query_selector("table.table-lists:not([style*='display: none'])")
-                  rows = visible_table.query_selector_all("tbody tr")
+                  # 抓可见的赛程表
+                  table = page.query_selector("table.table-lists:not([style*='display: none'])")
+                  rows = table.query_selector_all("tbody tr")
 
                   data = []
                   for row in rows:
@@ -35,5 +60,13 @@
                   df.to_csv(f"data/{filename}.csv", index=False, encoding="utf-8-sig")
                   browser.close()
 
-          print("✅ 赛程抓取成功（使用可见表格策略）")
+          print("✅ 赛程抓取成功（可见表格）")
           EOF
+
+      - name: Commit and push
+        run: |
+          git config user.name "Louis Zeng Bot"
+          git config user.email "actions@github.com"
+          git add data/*.csv || true
+          git commit -m "Auto update schedule" || true
+          git push
