@@ -1,41 +1,39 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-稳态三源：懂球帝 API → 懂球帝网页 → 直播吧 data 网页
-升级点：
-- 直播吧 data 表格使用 BeautifulSoup + lxml 强容错解析
-- 识别 “主队 | 比分/VS | 客队” 多种列位；比分支持 1-0 / 1:0 / VS / vs
-- 队名别名匹配（国米/国际米兰，成都蓉城/蓉城）
-- 扩大时间窗口，空数据不覆盖旧 CSV，并保留 debug 文件
+抓取顺序：直播吧（静态最稳） → 懂球帝球队页（网页内嵌 JSON） → 懂球帝 API（可用就用）
+- 解析容错：支持表格解析和“全文兜底”正则，尽量把日期、时间、对手、主客、赛事抠出来
+- CSV 字段：date,time_local,opponent,home_away,competition,stadium,status
+- 生成 data/parse_report.txt 记录每步命中数
 """
 
 import os, re, csv, time, json, random, requests
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 from bs4 import BeautifulSoup
 
-# ===================== 队伍配置 =====================
+# ============= 你只需在这块更新 ID / URL（如果有变化） =============
 TEAMS = {
     "chengdu": {
         "name": "成都蓉城",
-        "aliases": ["成都蓉城", "蓉城"],
+        "aliases": ["成都蓉城", "蓉城", "Chengdu Rongcheng", "Rongcheng"],
         "csv": "data/chengdu.csv",
-        "api_id": "50076899",
+        "api_id": "50016554",  # 改成你的最新 ID
         "dqd_page": "https://www.dongqiudi.com/team/50076899.html",
         "zb8_page": "https://data.zhibo8.cc/html/team.html?match=&team=%E6%88%90%E9%83%BD%E8%93%89%E5%9F%8E",
     },
     "inter": {
         "name": "国际米兰",
-        "aliases": ["国际米兰", "国米"],
+        "aliases": ["国际米兰", "国米", "Inter", "Inter Milan", "Internazionale"],
         "csv": "data/inter.csv",
-        "api_id": "50001042",
+        "api_id": "50001752",  # 改成你的最新 ID
         "dqd_page": "https://www.dongqiudi.com/team/50001042.html",
         "zb8_page": "https://data.zhibo8.cc/html/team.html?match=&team=%E5%9B%BD%E9%99%85%E7%B1%B3%E5%85%B0",
     },
 }
+# ==========================================================
 
-# ===================== 全局参数 =====================
 API_URL_TPL = "https://api.dongqiudi.com/v3/team/schedule/list?team_id={team_id}"
 MAX_RETRIES, RETRY_DELAY = 3, 5
 CST = ZoneInfo("Asia/Shanghai")
@@ -75,13 +73,11 @@ def headers_html():
         "Referer": "https://www.dongqiudi.com/",
     }
 
-# ===================== 小工具 =====================
 def save_debug(path: str, content: str | bytes):
     os.makedirs(os.path.dirname(path), exist_ok=True)
     mode = "wb" if isinstance(content, (bytes, bytearray)) else "w"
     with open(path, mode) as f:
         f.write(content)
-    print(f"📝 debug → {path}")
 
 def http_get(url: str, is_json=True) -> Optional[requests.Response]:
     for i in range(1, MAX_RETRIES + 1):
@@ -102,7 +98,28 @@ def name_hit(name: str, aliases: List[str]) -> bool:
     n = norm(name)
     return any(a in n for a in [norm(x) for x in aliases])
 
-# ===================== 懂球帝 API/网页解析（保持不变的稳态自适配） =====================
+def write_csv(path: str, rows: List[Dict]):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=FIELDS)
+        w.writeheader()
+        w.writerows(rows)
+    print(f"💾 写入 {len(rows)} 条 → {path}")
+
+def preserve_old_if_empty(path: str, new_rows: List[Dict]) -> bool:
+    if new_rows:
+        return False
+    if os.path.exists(path) and os.path.getsize(path) > 0:
+        print(f"🛟 新数据为空，保留旧文件：{path}")
+        return True
+    return False
+
+def append_report(lines: List[str]):
+    os.makedirs("data", exist_ok=True)
+    with open("data/parse_report.txt", "w", encoding="utf-8") as f:
+        f.write("\n".join(lines))
+
+# ===== 懂球帝 HTML JSON 抽取 =====
 def api_pick_matches(payload: Any) -> List[Dict]:
     if not isinstance(payload, dict):
         return []
@@ -147,18 +164,17 @@ def parse_dqd_html(html: str) -> List[Dict]:
                 data = json.loads(raw)
                 found = list(deep_walk(data))
                 if found:
-                    print(f"🔎 DQD HTML 提取 {len(found)} 条（via {pat}）")
+                    print(f"🔎 DQD HTML 提取 {len(found)} 条")
                     return found
             except Exception:
                 pass
 
-    # 兜底：扫描较大的 JSON 片段
+    # 兜底扫描片段（不常走）
     found = []
     for blk in re.findall(r"\{.*?\}", html, flags=re.S):
         if ("home" in blk and "away" in blk) and ("start_play" in blk or "match_time" in blk):
             try:
-                j = json.loads(blk)
-                found.append(j)
+                j = json.loads(blk); found.append(j)
             except Exception:
                 continue
     if found:
@@ -184,34 +200,25 @@ def normalize_row(item: Dict, aliases: List[str]) -> Optional[Dict]:
         return None
     dt = datetime.fromtimestamp(ts, tz=CST)
 
-    # 队名
     home = item.get("home_name") or item.get("home_team_name") or item.get("home") or ""
     away = item.get("away_name") or item.get("away_team_name") or item.get("away") or ""
 
     is_home = item.get("is_home")
     if is_home is None:
-        if name_hit(home, aliases):
-            is_home = True
-        elif name_hit(away, aliases):
-            is_home = False
-        else:
-            return None
+        if name_hit(home, aliases): is_home = True
+        elif name_hit(away, aliases): is_home = False
+        else: return None
 
     opponent = away if is_home else home
     comp = item.get("competition_name") or item.get("competition") or item.get("tournament_name") or ""
     stadium = item.get("stadium_name") or item.get("stadium") or ""
 
     status_name = (item.get("status_name") or item.get("status") or "").strip()
-    if status_name in ("延期", "推迟", "暂停"):
-        tag = "⚠️比赛延期"
-    elif status_name in ("取消",):
-        tag = "❌比赛取消"
-    elif status_name in ("待定", "未开赛", "时间待定"):
-        tag = "🕓时间待定"
-    elif status_name in ("完场", "已结束"):
-        tag = "✅完场"
-    else:
-        tag = ""
+    if status_name in ("延期", "推迟", "暂停"): tag = "⚠️比赛延期"
+    elif status_name in ("取消",):             tag = "❌比赛取消"
+    elif status_name in ("待定", "未开赛", "时间待定"): tag = "🕓时间待定"
+    elif status_name in ("完场", "已结束"):     tag = "✅完场"
+    else:                                       tag = ""
 
     return {
         "date": dt.strftime("%Y-%m-%d"),
@@ -224,199 +231,212 @@ def normalize_row(item: Dict, aliases: List[str]) -> Optional[Dict]:
         "_dt": dt,
     }
 
-# ===================== 直播吧 data 强容错解析 =====================
+# ===== 直播吧解析（表格 + 文本兜底） =====
 SCORE_RE = re.compile(r"^\s*(\d+\s*[-:]\s*\d+|vs|VS)\s*$")
+RE_DATE = re.compile(r"(\d{4}-\d{1,2}-\d{1,2})")
+RE_TIME = re.compile(r"(\d{1,2}:\d{2})")
+RE_VS   = re.compile(r"\b(VS|vs)\b")
+RE_SCORE= re.compile(r"\b(\d+\s*[-:]\s*\d+)\b")
 
 def looks_like_team(s: str) -> bool:
     s = s.strip()
-    # 允许中文或字母，长度 1-20
-    return bool(re.search(r"[\u4e00-\u9fa5A-Za-z]", s)) and 1 <= len(s) <= 20
+    return bool(re.search(r"[\u4e00-\u9fa5A-Za-z]", s)) and 1 <= len(s) <= 25
 
-def parse_zb8_html(html: str, aliases: List[str]) -> List[Dict]:
+def parse_zb8_table(html: str, aliases: List[str]) -> List[Dict]:
     soup = BeautifulSoup(html, "lxml")
     rows: List[Dict] = []
+    for table in soup.find_all("table"):
+        for tr in table.find_all("tr"):
+            tds = [td.get_text(" ", strip=True) for td in tr.find_all("td")]
+            if len(tds) < 3:
+                continue
+            whole = " | ".join(tds)
+            m_date = re.search(r"(\d{4}-\d{1,2}-\d{1,2})", whole)
+            if not m_date:
+                continue
+            date = m_date.group(1)
+            m_time = re.search(r"(\d{1,2}:\d{2})", whole)
+            time_local = m_time.group(1) if m_time else "20:00"
 
-    # 找所有 table 的所有 tr，逐行容错
-    for tr in soup.find_all("tr"):
-        tds = [td.get_text(" ", strip=True) for td in tr.find_all("td")]
-        if len(tds) < 4:
-            continue
+            score_idx = None
+            for i, c in enumerate(tds):
+                if SCORE_RE.match(c):
+                    score_idx = i; break
 
-        line = " | ".join(tds)
-
-        # 日期与时间
-        m_date = re.search(r"(\d{4}-\d{1,2}-\d{1,2})", line)
-        if not m_date:
-            continue
-        date = m_date.group(1)
-        m_time = re.search(r"(\d{1,2}:\d{2})", line)
-        time_local = m_time.group(1) if m_time else "20:00"
-
-        # 尝试定位比分/VS 单元格
-        score_idx = None
-        for i, cell in enumerate(tds):
-            if SCORE_RE.match(cell):
-                score_idx = i
-                break
-
-        home = away = comp = ""
-        if score_idx is not None:
-            # 典型： [日期] [时间/赛事] ... [主队] [比分/VS] [客队] ...
-            if score_idx - 1 >= 0:
-                home = tds[score_idx - 1]
-            if score_idx + 1 < len(tds):
-                away = tds[score_idx + 1]
-
-            # 赛事：在前几列挑一个包含 “联/杯/甲/超/冠” 的
-            for cell in tds[:score_idx]:
-                if any(k in cell for k in ("联", "杯", "甲", "超", "冠")):
-                    comp = cell
-                    break
-        else:
-            # 没有明确比分，找 “队名 VS 队名” 两侧的队名
-            vs_idx = None
-            for i, cell in enumerate(tds):
-                if cell.strip().lower() == "vs":
-                    vs_idx = i
-                    break
-            if vs_idx is not None:
-                if vs_idx - 1 >= 0:
-                    home = tds[vs_idx - 1]
-                if vs_idx + 1 < len(tds):
-                    away = tds[vs_idx + 1]
-                for cell in tds[:vs_idx]:
-                    if any(k in cell for k in ("联", "杯", "甲", "超", "冠")):
-                        comp = cell
-                        break
+            home = away = comp = ""
+            if score_idx is not None:
+                if score_idx - 1 >= 0: home = tds[score_idx - 1]
+                if score_idx + 1 < len(tds): away = tds[score_idx + 1]
+                for c in tds[:score_idx]:
+                    if any(k in c for k in ("联", "杯", "甲", "超", "冠", "欧", "亚")):
+                        comp = c; break
             else:
-                # 再兜底：整行包含别名，且这一行里有两个像队名的词
-                if any(name_hit(c, aliases) for c in tds):
+                vs_idx = next((i for i,c in enumerate(tds) if c.strip().lower()=="vs"), None)
+                if vs_idx is not None:
+                    if vs_idx - 1 >= 0: home = tds[vs_idx - 1]
+                    if vs_idx + 1 < len(tds): away = tds[vs_idx + 1]
+                    for c in tds[:vs_idx]:
+                        if any(k in c for k in ("联", "杯", "甲", "超", "冠", "欧", "亚")):
+                            comp = c; break
+                else:
                     team_words = [c for c in tds if looks_like_team(c)]
                     if len(team_words) >= 2:
-                        # 默认左为主右为客
                         home, away = team_words[0], team_words[1]
-                        for cell in tds:
-                            if any(k in cell for k in ("联", "杯", "甲", "超", "冠")):
-                                comp = cell
-                                break
+                        for c in tds:
+                            if any(k in c for k in ("联", "杯", "甲", "超", "冠", "欧", "亚")):
+                                comp = c; break
 
+            if not (home and away):
+                continue
+
+            if name_hit(home, aliases):
+                my_is_home, opponent = True, away
+            elif name_hit(away, aliases):
+                my_is_home, opponent = False, home
+            else:
+                my_is_home, opponent = None, away
+
+            rows.append({
+                "date": date,
+                "time_local": time_local,
+                "opponent": opponent,
+                "home_away": "Home" if my_is_home is True else ("Away" if my_is_home is False else "Unknown"),
+                "competition": comp,
+                "stadium": "",
+                "status": ""
+            })
+    print(f"🔎 ZB8 表格解析 {len(rows)} 条")
+    return rows
+
+def parse_zb8_text_grep(html: str, aliases: List[str]) -> List[Dict]:
+    text = BeautifulSoup(html, "lxml").get_text(" ", strip=True)
+    rows: List[Dict] = []
+    for m in RE_DATE.finditer(text):
+        date = m.group(1)
+        start = m.end()
+        window = text[start:start+180]
+        t = RE_TIME.search(window)
+        time_local = t.group(1) if t else "20:00"
+        vs = RE_VS.search(window)
+        sc = RE_SCORE.search(window)
+
+        def pick_team(chunk: str) -> Optional[str]:
+            cands = re.findall(r"[\u4e00-\u9fa5A-Za-z]{2,25}", chunk)
+            ban = {"年","月","日","直播","数据","赛","联赛","杯","甲","超","欧","亚","第","轮"}
+            cands = [w for w in cands if w not in ban]
+            return cands[-1] if cands else None
+
+        home = away = None
+        if vs:
+            left = window[:vs.start()]; right = window[vs.end():]
+            home = pick_team(left); away = pick_team(right)
+        elif sc:
+            left = window[:sc.start()]; right = window[sc.end():]
+            home = pick_team(left); away = pick_team(right)
         if not (home and away):
             continue
 
-        # 判定主客
         if name_hit(home, aliases):
             my_is_home, opponent = True, away
         elif name_hit(away, aliases):
             my_is_home, opponent = False, home
         else:
-            # 如果两端都不含别名，就跳过（避免错抓）
-            continue
+            my_is_home, opponent = None, away
 
         rows.append({
             "date": date,
             "time_local": time_local,
             "opponent": opponent,
-            "home_away": "Home" if my_is_home else "Away",
-            "competition": comp,
+            "home_away": "Home" if my_is_home is True else ("Away" if my_is_home is False else "Unknown"),
+            "competition": "",
             "stadium": "",
             "status": ""
         })
-
-    print(f"🔎 ZB8 解析 {len(rows)} 条")
+    print(f"🔎 ZB8 文本兜底解析 {len(rows)} 条")
     return rows
 
-# ===================== 主流程 =====================
-def fetch_team(team_key: str, info: Dict) -> List[Dict]:
+# ===== 主流程：优先 ZB8 → DQD → API =====
+def fetch_team(team_key: str, info: Dict) -> Tuple[List[Dict], List[str]]:
+    report = [f"=== {info['name']} ==="]
     aliases = info["aliases"]
     now = datetime.now(CST)
     start = (now - timedelta(days=PAST_DAYS)).replace(hour=0, minute=0, second=0, microsecond=0)
     end   = (now + timedelta(days=FUTURE_DAYS)).replace(hour=23, minute=59, second=59, microsecond=0)
 
-    raw_list: List[Dict] = []
+    rows_from_api: List[Dict] = []
+    rows_from_dqd: List[Dict] = []
+    rows_from_zb8: List[Dict] = []
 
-    # 1) DQD API
-    api_id = info.get("api_id")
-    if api_id:
-        api_url = API_URL_TPL.format(team_id=api_id)
-        print(f"\n📡 {info['name']} API：{api_url}")
-        r = http_get(api_url, is_json=True)
-        if r and r.status_code == 200:
-            try:
-                js = r.json()
-                raw_list = api_pick_matches(js)
-            except Exception as e:
-                print("API JSON 解析失败：", e)
-        if not raw_list and r is not None:
-            save_debug(f"data/debug_{team_key}.json", r.text)
+    # 1) 直播吧
+    if info.get("zb8_page"):
+        print(f"\n🪂 ZB8 优先抓取：{info['zb8_page']}")
+        zr = http_get(info["zb8_page"], is_json=False)
+        if zr and zr.status_code == 200 and zr.text:
+            save_debug(f"data/debug_{team_key}_zb8.html", zr.text[:200000].encode("utf-8", "ignore"))
+            rows_from_zb8 = parse_zb8_table(zr.text, aliases)
+            if not rows_from_zb8:
+                rows_from_zb8 = parse_zb8_text_grep(zr.text, aliases)
+        report.append(f"ZB8命中：{len(rows_from_zb8)}")
 
-    # 2) DQD HTML
-    if not raw_list and info.get("dqd_page"):
+    # 2) 懂球帝网页
+    if not rows_from_zb8 and info.get("dqd_page"):
         print(f"🪂 DQD 回退：{info['dqd_page']}")
         hr = http_get(info["dqd_page"], is_json=False)
         if hr and hr.status_code == 200 and hr.text:
             save_debug(f"data/debug_{team_key}_dqd.html", hr.text[:200000].encode("utf-8", "ignore"))
-            raw_list = parse_dqd_html(hr.text)
+            dqd_items = parse_dqd_html(hr.text)
+            for it in dqd_items:
+                r = normalize_row(it, aliases)
+                if r and ("_dt" in r) and (start <= r["_dt"] <= end):
+                    r.pop("_dt", None); rows_from_dqd.append(r)
+        report.append(f"DQD网页命中：{len(rows_from_dqd)}")
 
-    # 3) ZB8 HTML
-    zb8_rows: List[Dict] = []
-    if not raw_list and info.get("zb8_page"):
-        print(f"🪂 ZB8 回退：{info['zb8_page']}")
-        zr = http_get(info["zb8_page"], is_json=False)
-        if zr and zr.status_code == 200 and zr.text:
-            save_debug(f"data/debug_{team_key}_zb8.html", zr.text[:200000].encode("utf-8", "ignore"))
-            zb8_rows = parse_zb8_html(zr.text, aliases)
+    # 3) 懂球帝 API
+    if not rows_from_zb8 and not rows_from_dqd and info.get("api_id"):
+        api_url = API_URL_TPL.format(team_id=info["api_id"])
+        print(f"📡 API 兜底：{api_url}")
+        r = http_get(api_url, is_json=True)
+        if r and r.status_code == 200:
+            try:
+                js = r.json()
+                for it in api_pick_matches(js):
+                    rr = normalize_row(it, aliases)
+                    if rr and ("_dt" in rr) and (start <= rr["_dt"] <= end):
+                        rr.pop("_dt", None); rows_from_api.append(rr)
+            except Exception as e:
+                print("API JSON 解析失败：", e)
+        if not rows_from_api and r is not None:
+            save_debug(f"data/debug_{team_key}.json", r.text)
+        report.append(f"API命中：{len(rows_from_api)}")
 
-    # 归一化
-    rows: List[Dict] = []
-    if raw_list:
-        for it in raw_list:
-            row = normalize_row(it, aliases)
-            if not row:
-                continue
-            if not (start <= row["_dt"] <= end):
-                continue
-            row.pop("_dt", None)
-            rows.append(row)
-    else:
-        rows = zb8_rows
+    rows = rows_from_zb8 or rows_from_dqd or rows_from_api
 
     rows.sort(key=lambda x: (x["date"], x["time_local"], x["opponent"], x["competition"]))
     out, seen = [], set()
     for r0 in rows:
         key = (r0["date"], r0["time_local"], r0["opponent"], r0["competition"])
-        if key in seen:
-            continue
-        seen.add(key)
-        out.append(r0)
+        if key in seen: continue
+        seen.add(key); out.append(r0)
 
+    report.append(f"最终写入：{len(out)}")
     print(f"✅ 最终可用条数：{len(out)}")
-    return out
-
-def write_csv(path: str, rows: List[Dict]):
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path, "w", newline="", encoding="utf-8") as f:
-        w = csv.DictWriter(f, fieldnames=FIELDS)
-        w.writeheader()
-        w.writerows(rows)
-    print(f"💾 写入 {len(rows)} 条 → {path}")
-
-def preserve_old_if_empty(path: str, new_rows: List[Dict]) -> bool:
-    if new_rows:
-        return False
-    if os.path.exists(path) and os.path.getsize(path) > 0:
-        print(f"🛟 新数据为空，保留旧文件：{path}")
-        return True
-    return False
+    return out, report
 
 def main():
     total = 0
+    report_all: List[str] = []
     for key, info in TEAMS.items():
-        rows = fetch_team(key, info)
+        rows, rpt = fetch_team(key, info)
+        report_all.extend(rpt)
         if preserve_old_if_empty(info["csv"], rows):
             continue
         write_csv(info["csv"], rows)
         total += len(rows)
+    report_all.append(f"总计写入：{total}")
+    append_report(report_all)
+    print("\n".join(report_all))
     print(f"\n🎯 本次可写入总计 {total} 条。")
 
 if __name__ == "__main__":
     main()
+    
