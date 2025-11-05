@@ -1,9 +1,5 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""
-根据 data/*.csv 生成 README 仪表盘（最近一场未来比赛）
-"""
-
 import csv
 from datetime import datetime
 
@@ -11,11 +7,9 @@ TEAM_FILES = {
     "成都蓉城": "data/chengdu.csv",
     "国际米兰": "data/inter.csv",
 }
-
 README = "README.md"
 
-
-def next_match(csv_path):
+def next_match(csv_path: str):
     try:
         with open(csv_path, encoding="utf-8") as f:
             r = csv.DictReader(f)
@@ -37,7 +31,6 @@ def next_match(csv_path):
         return None
     return None
 
-
 def build_table():
     lines = [
         "| 球队 | 赛事 | 对手 | 时间 | 主/客场 | 状态 |",
@@ -45,12 +38,11 @@ def build_table():
     ]
     for team, path in TEAM_FILES.items():
         m = next_match(path)
-        if not m:
-            lines.append(f"| {team} | - | - | - | - | - |")
-        else:
+        if m:
             lines.append(f"| {team} | {m['competition']} | {m['opponent']} | {m['when']} | {m['venue']} | {m['status']} |")
+        else:
+            lines.append(f"| {team} | - | - | - | - | - |")
     return "\n".join(lines)
-
 
 def main():
     content = f"""# ⚽ GitHub 自动更新足球订阅日历
@@ -67,6 +59,6 @@ def main():
         f.write(content)
     print("✅ README.md 已更新")
 
-
 if __name__ == "__main__":
     main()
+    
