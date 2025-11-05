@@ -2,17 +2,17 @@
 # -*- coding: utf-8 -*-
 """
 懂球帝 App API 稳定增强版
-- 正确球队 ID（成都蓉城50016554，国际米兰50001752）
-- 北京时间转换（Asia/Shanghai）
-- 自动重试、防403（UA）
-- 延期/取消/待定状态标注
-- 仅保留未来比赛、排序去重
+- 正确球队ID：成都蓉城(50016554)、国际米兰(50001752)
+- 北京时间(Asia/Shanghai)转换，避免UTC跨日
+- 自动重试、防403（移动端UA）
+- 延期/取消/待定/完场 状态标注
+- 仅保留未来比赛，去重 + 排序
 """
 
-import requests, csv, time, os
+import os, csv, time, requests
+from typing import List, Dict
 from datetime import datetime
 from zoneinfo import ZoneInfo
-from typing import List, Dict, Any
 
 HEADERS = {
     "User-Agent": "dongqiudiApp/7.0.6 (iPhone; iOS 17.0.1; Scale/3.00)",
@@ -20,6 +20,7 @@ HEADERS = {
     "Accept-Encoding": "gzip, deflate, br",
 }
 
+# ✅ 校正后的球队ID
 TEAMS = {
     "chengdu": {"id": "50016554", "name": "成都蓉城", "csv": "data/chengdu.csv"},
     "inter":   {"id": "50001752", "name": "国际米兰", "csv": "data/inter.csv"},
@@ -30,7 +31,8 @@ MAX_RETRIES = 3
 RETRY_DELAY = 5
 CST = ZoneInfo("Asia/Shanghai")
 
-def safe_get_json(url: str) -> Dict[str, Any]:
+
+def safe_get_json(url: str) -> Dict:
     for i in range(1, MAX_RETRIES + 1):
         try:
             r = requests.get(url, headers=HEADERS, timeout=20)
@@ -42,77 +44,85 @@ def safe_get_json(url: str) -> Dict[str, Any]:
         time.sleep(RETRY_DELAY)
     return {}
 
-def pick_matches(payload: Dict[str, Any]) -> List[Dict[str, Any]]:
-    """兼容不同返回结构：data(list) 或 data.matches(list)"""
+
+def pick_matches(payload: Dict) -> List[Dict]:
+    """兼容不同返回：data(list) 或 data.matches(list)"""
     if not isinstance(payload, dict):
         return []
-    d = payload.get("data")
-    if isinstance(d, list):
-        return d
-    if isinstance(d, dict) and isinstance(d.get("matches"), list):
-        return d["matches"]
+    if isinstance(payload.get("data"), list):
+        return payload["data"]
+    data = payload.get("data", {})
+    if isinstance(data, dict) and isinstance(data.get("matches"), list):
+        return data["matches"]
     return []
 
-def status_tag(status_name: str) -> str:
-    s = (status_name or "").strip()
-    if s in ("延期", "推迟", "暂停"):
-        return "⚠️比赛延期"
-    if s in ("取消",):
-        return "❌比赛取消"
-    if s in ("待定", "未开赛", "时间待定"):
-        return "🕓时间待定"
-    if s in ("完场", "已结束"):
-        return "✅完场"
-    return ""
 
-def fetch_team(team_id: str, team_name: str) -> List[Dict[str, str]]:
+def fetch_team(team_id: str, team_name: str) -> List[Dict]:
     url = API_URL.format(team_id=team_id)
     print(f"\n📦 抓取 {team_name} …")
     js = safe_get_json(url)
     raw = pick_matches(js)
 
     now = datetime.now(CST)
-    rows: List[Dict[str, str]] = []
+    rows: List[Dict] = []
+
     for it in raw:
         try:
-            ts = int(it.get("start_play", 0))  # Unix 秒
+            ts = int(it.get("start_play", 0))
             if ts <= 0:
                 continue
             dt = datetime.fromtimestamp(ts, tz=CST)
             if dt <= now:
-                continue  # 仅未来比赛
+                continue  # 仅未来
 
             is_home = bool(it.get("is_home"))
             home = it.get("home_name", "")
             away = it.get("away_name", "")
             opponent = away if is_home else home
+            comp = it.get("competition_name", "")
+            stadium = it.get("stadium_name", "")
+
+            status_name = (it.get("status_name") or "").strip()
+            if status_name in ("延期", "推迟", "暂停"):
+                tag = "⚠️比赛延期"
+            elif status_name in ("取消",):
+                tag = "❌比赛取消"
+            elif status_name in ("待定", "未开赛", "时间待定"):
+                tag = "🕓时间待定"
+            elif status_name in ("完场", "已结束"):
+                tag = "✅完场"
+            else:
+                tag = ""
 
             rows.append({
                 "date": dt.strftime("%Y-%m-%d"),
                 "time_local": dt.strftime("%H:%M"),
                 "opponent": opponent,
                 "home_away": "Home" if is_home else "Away",
-                "competition": it.get("competition_name", ""),
-                "stadium": it.get("stadium_name", ""),
-                "status": status_tag(it.get("status_name")),
+                "competition": comp,
+                "stadium": stadium,
+                "status": tag,
             })
         except Exception as e:
             print("解析错误：", e)
 
-    # 去重+排序
+    print(f"✅ {team_name} 获取到 {len(rows)} 场未来比赛")
+    return dedup_and_sort(rows)
+
+
+def dedup_and_sort(items: List[Dict]) -> List[Dict]:
     seen, out = set(), []
-    for r in rows:
+    for r in items:
         key = (r["date"], r["time_local"], r["opponent"], r["competition"])
         if key in seen:
             continue
         seen.add(key)
         out.append(r)
     out.sort(key=lambda x: (x["date"], x["time_local"]))
-
-    print(f"✅ {team_name} 获取到 {len(out)} 场未来比赛")
     return out
 
-def save_csv(path: str, rows: List[Dict[str, str]]):
+
+def save_csv(path: str, rows: List[Dict]):
     os.makedirs(os.path.dirname(path), exist_ok=True)
     fields = ["date", "time_local", "opponent", "home_away", "competition", "stadium", "status"]
     with open(path, "w", newline="", encoding="utf-8") as f:
@@ -121,6 +131,7 @@ def save_csv(path: str, rows: List[Dict[str, str]]):
         w.writerows(rows)
     print(f"💾 已写入 {len(rows)} 条 → {path}")
 
+
 def main():
     total = 0
     for _, info in TEAMS.items():
@@ -128,6 +139,7 @@ def main():
         save_csv(info["csv"], rows)
         total += len(rows)
     print(f"\n🎯 总计写入 {total} 条，完成。")
+
 
 if __name__ == "__main__":
     main()
