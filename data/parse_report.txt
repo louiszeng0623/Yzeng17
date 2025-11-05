@@ -2,10 +2,12 @@
 ZB8命中：0
 DQD网页命中：0
 API命中：0
+Playwright命中：0
 最终写入：0
 === 国际米兰 ===
 ZB8命中：0
 DQD网页命中：0
 API命中：0
+Playwright命中：0
 最终写入：0
 总计写入：0
