@@ -23,12 +23,11 @@ jobs:
           pip install pandas playwright
           playwright install chromium
 
-      - name: Fetch schedules with Playwright
+      - name: Fetch schedules (Playwright)
         run: |
           python3 << 'EOF'
           from playwright.sync_api import sync_playwright
-          import pandas as pd
-          import os
+          import pandas as pd, os
 
           os.makedirs("data", exist_ok=True)
 
@@ -52,10 +51,8 @@ jobs:
                   data = []
                   for row in rows:
                       tds = row.query_selector_all("td")
-                      if len(tds) < 7:
-                          continue
+                      if len(tds) < 7: continue
                       cols = [c.inner_text().strip() for c in tds]
-                      # 结构：0 日期时间  1 主队  3 赛事  4 比分  6 客队  （其余是队徽/星期）
                       date_time = cols[0]
                       home      = cols[1]
                       league    = cols[3]
@@ -71,7 +68,7 @@ jobs:
           print("✅ CSV 已生成：data/chengdu.csv, data/inter.csv")
           EOF
 
-      - name: Build ICS from CSV and publish to docs/
+      - name: Convert CSV to ICS and publish
         run: |
           python3 << 'EOF'
           import csv, os, re, datetime as dt
@@ -85,105 +82,74 @@ jobs:
               ("data/inter.csv",   "国际米兰赛程"),
           ]
 
-          def guess_year(month: int) -> int:
-              # 赛季跨年时的保守策略：若月份比当前月小很多（>6），认为是下一年
-              y = now.year
+          def guess_year(month):
               if month < (now.month - 6):
-                  return y + 1
-              return y
+                  return now.year + 1
+              return now.year
 
-          def parse_dt(s: str) -> dt.datetime | None:
-              # 输入格式形如 "05-02 19:35" 或 "05-02 19:35\n"
+          def parse_dt(s):
               s = s.strip()
               m = re.match(r"^(\d{2})-(\d{2})\s+(\d{2}):(\d{2})$", s)
-              if not m:
-                  return None
+              if not m: return None
               mm, dd, HH, MM = map(int, m.groups())
-              yyyy = guess_year(mm)
-              return dt.datetime(yyyy, mm, dd, HH, MM)
+              return dt.datetime(guess_year(mm), mm, dd, HH, MM)
 
           def ics_header():
-              return (
-                  "BEGIN:VCALENDAR\r\n"
-                  "PRODID:-//Louis Zeng//Auto Football Calendar//CN\r\n"
-                  "VERSION:2.0\r\n"
-                  f"X-WR-TIMEZONE:{TZ}\r\n"
-                  f"BEGIN:VTIMEZONE\r\nTZID:{TZ}\r\nEND:VTIMEZONE\r\n"
-              )
+              return f"BEGIN:VCALENDAR\r\nVERSION:2.0\r\nX-WR-TIMEZONE:{TZ}\r\n"
 
           def ics_footer():
               return "END:VCALENDAR\r\n"
 
-          def vevent(start_dt: dt.datetime, summary: str, description: str, uid: str) -> str:
-              # 以本地时区写入（含 TZID）
+          def vevent(start, title, desc, uid):
               stamp = dt.datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
-              dtstart = start_dt.strftime("%Y%m%dT%H%M00")
+              dtstart = start.strftime("%Y%m%dT%H%M00")
               return (
                   "BEGIN:VEVENT\r\n"
                   f"UID:{uid}\r\n"
                   f"DTSTAMP:{stamp}\r\n"
                   f"DTSTART;TZID={TZ}:{dtstart}\r\n"
-                  f"SUMMARY:{summary}\r\n"
-                  f"DESCRIPTION:{description}\r\n"
+                  f"SUMMARY:{title}\r\n"
+                  f"DESCRIPTION:{desc}\r\n"
                   "END:VEVENT\r\n"
               )
 
           outdir = Path("docs/calendar")
           outdir.mkdir(parents=True, exist_ok=True)
 
-          index_lines = [
-              "<!doctype html><meta charset='utf-8'><title>Football Calendars</title>",
-              "<h1>订阅链接</h1><ul>"
-          ]
+          # ✅ 禁用 Jekyll
+          Path("docs/.nojekyll").write_text("")
+
+          index = ["<h1>足球赛程订阅</h1><ul>"]
 
           for src, calname in srcs:
-              if not os.path.exists(src):
-                  print(f"⚠️ 缺少 {src}，跳过")
-                  continue
-
+              if not os.path.exists(src): continue
               events = []
-              with open(src, newline="", encoding="utf-8") as f:
+              with open(src, encoding="utf-8") as f:
                   reader = csv.DictReader(f)
                   for row in reader:
-                      dtstr = (row.get("日期时间") or "").strip()
-                      league = (row.get("赛事") or "").strip()
-                      home   = (row.get("主队") or "").strip()
-                      score  = (row.get("比分") or "").strip()
-                      away   = (row.get("客队") or "").strip()
-
-                      start = parse_dt(dtstr)
-                      if not start:
-                          continue
-
-                      # 文案
-                      title = f"{league} | {home} vs {away}"
-                      desc  = f"{league}\\n{home} {score} {away}".strip()
-
-                      uid   = f"{start.strftime('%Y%m%d%H%M')}-{home}-{away}@auto-football"
+                      start = parse_dt(row["日期时间"])
+                      if not start: continue
+                      title = f"{row['赛事']} | {row['主队']} vs {row['客队']}"
+                      desc = f"{row['主队']} {row['比分']} {row['客队']}"
+                      uid = f"{start.strftime('%Y%m%d%H%M')}-{row['主队']}-{row['客队']}@auto"
                       events.append(vevent(start, title, desc, uid))
 
-              ics_path = outdir / (Path(src).stem + ".ics")
-              with open(ics_path, "w", encoding="utf-8") as f:
+              ics = outdir / (Path(src).stem + ".ics")
+              with open(ics, "w", encoding="utf-8") as f:
                   f.write(ics_header())
-                  for e in events:
-                      f.write(e)
+                  for e in events: f.write(e)
                   f.write(ics_footer())
 
-              rel = f"/calendar/{ics_path.name}"
-              index_lines.append(f"<li><a href='{rel}'>{calname}</a></li>")
-              print(f"✅ 生成 {ics_path}")
+              index.append(f"<li><a href='calendar/{ics.name}'>{calname}</a></li>")
 
-          index_lines.append("</ul>")
-          with open(outdir.parent / "index.html", "w", encoding="utf-8") as f:
-              f.write("\n".join(index_lines))
-
-          print("✅ docs/ 已更新（含 index.html + calendar/*.ics）")
+          index.append("</ul>")
+          Path("docs/index.html").write_text("\n".join(index), encoding="utf-8")
           EOF
 
       - name: Commit and push
         run: |
           git config user.name "Louis Zeng Bot"
           git config user.email "actions@github.com"
-          git add data/*.csv docs/index.html docs/calendar/*.ics || true
-          git commit -m "Auto: refresh CSV and ICS calendars" || true
+          git add data/*.csv docs/index.html docs/calendar/*.ics docs/.nojekyll || true
+          git commit -m "Auto update schedules & ICS" || true
           git push
