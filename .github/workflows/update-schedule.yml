@@ -2,12 +2,13 @@ name: Update Football Calendar (Full Auto Version)
 
 on:
   schedule:
-    - cron: '0 20 * * *'   # 每天 UTC 20:00 = 北京时间 04:00
-  workflow_dispatch:       # 可手动运行
+    - cron: '0 20 * * *'   # 每天 UTC 20:00（北京时间次日 04:00）
+  workflow_dispatch:
   push:
     paths:
-      - 'scripts/*.py'
-      - 'data/*.csv'
+      - 'scripts/**'
+      - 'data/**'
+      - '.github/workflows/update-schedule.yml'
 
 permissions:
   contents: write
@@ -15,44 +16,36 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
+    env:
+      # 如需自定义 UA，改这里；不想固定可删除这一行，脚本会随机轮换内置 UA
+      DQD_USER_AGENT: "dongqiudiApp/7.1.0 (iPhone; iOS 17.5; Scale/3.00)"
     steps:
-      # 1) 拉代码
       - uses: actions/checkout@v3
 
-      # 2) Python
       - uses: actions/setup-python@v4
         with:
           python-version: '3.10'
 
-      # 3) 依赖
       - name: Install dependencies
-        run: pip install requests
+        run: |
+          pip install requests
 
-      # 4) 抓赛程
       - name: Fetch latest schedules
         run: python scripts/fetch_schedule.py
 
-      # 5) 生成 ICS
       - name: Build ICS calendar
         run: python scripts/build_ics.py
 
-      # 6) 更新 README
       - name: Update README
         run: python scripts/update_readme.py
 
-      # 7) 提交并推送（先拉取避免 non fast-forward）
-      - name: Commit and push updates
+      - name: Commit and push updates (safe pull)
         run: |
           git config user.name 'github-actions'
-          git config user.email 'actions@users.noreply.github.com'
-
+          git config user.email 'actions@github.com'
           git fetch origin main
-          git pull --rebase origin main || true
-
           git add data/ calendar.ics README.md
-          if git diff --cached --quiet; then
-            echo "📭 无需更新"
-          else
-            git commit -m "自动更新赛程与日历 ⏰ $(date '+%Y-%m-%d %H:%M:%S')"
-            git push
-          fi
+          git commit -m "自动更新赛程与日历 ⏰ $(date '+%Y-%m-%d %H:%M:%S')" || true
+          # 关键：先拉取（rebase），避免 non-fast-forward 报错
+          git pull --rebase origin main || true
+          git push origin HEAD:main
