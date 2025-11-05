@@ -19,7 +19,7 @@ TEAMS = {
         "name": "成都蓉城",
         "aliases": ["成都蓉城", "蓉城", "Chengdu Rongcheng", "Rongcheng"],
         "csv": "data/chengdu.csv",
-        "api_id": "50016554",  # 改成你的最新 ID
+        "api_id": "50076899",  
         "dqd_page": "https://www.dongqiudi.com/team/50076899.html",
         "zb8_page": "https://data.zhibo8.cc/html/team.html?match=&team=%E6%88%90%E9%83%BD%E8%93%89%E5%9F%8E",
     },
@@ -27,7 +27,7 @@ TEAMS = {
         "name": "国际米兰",
         "aliases": ["国际米兰", "国米", "Inter", "Inter Milan", "Internazionale"],
         "csv": "data/inter.csv",
-        "api_id": "50001752",  # 改成你的最新 ID
+        "api_id": "500001042", 
         "dqd_page": "https://www.dongqiudi.com/team/50001042.html",
         "zb8_page": "https://data.zhibo8.cc/html/team.html?match=&team=%E5%9B%BD%E9%99%85%E7%B1%B3%E5%85%B0",
     },
