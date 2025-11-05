@@ -1,80 +1,55 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-"""
-自动更新 README.md 显示最近赛程概览
-"""
+name: Update Football Calendar (Full Auto Version)
 
-import csv
-from datetime import datetime, timedelta
+on:
+  schedule:
+    - cron: '0 20 * * *'   # 每天 UTC 20:00 = 北京时间 04:00
+  workflow_dispatch:       # 可手动运行
+  push:
+    paths:
+      - 'scripts/*.py'
+      - 'data/*.csv'
 
-TEAM_CSV = {
-    "成都蓉城": "data/chengdu.csv",
-    "国际米兰": "data/inter.csv",
-}
+permissions:
+  contents: write
 
-README_PATH = "README.md"
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      # 1️⃣ 获取仓库代码
+      - uses: actions/checkout@v3
 
+      # 2️⃣ 安装 Python 环境
+      - uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
 
-def load_next_match(csv_file):
-    try:
-        with open(csv_file, encoding="utf-8") as f:
-            reader = csv.DictReader(f)
-            now = datetime.now()
-            for row in reader:
-                try:
-                    match_time = datetime.strptime(f"{row['date']} {row['time_local']}", "%Y-%m-%d %H:%M")
-                    if match_time > now:
-                        return {
-                            "date": row['date'],
-                            "time": row['time_local'],
-                            "opponent": row['opponent'],
-                            "home_away": "主场" if row['home_away'] == "Home" else "客场",
-                            "status": row.get('status', ''),
-                            "competition": row.get('competition', '')
-                        }
-                except Exception:
-                    continue
-    except FileNotFoundError:
-        return None
-    return None
+      # 3️⃣ 安装依赖库（requests）
+      - name: Install dependencies
+        run: pip install requests
 
+      # 4️⃣ 抓取最新赛程（懂球帝 App API）
+      - name: Fetch latest schedules
+        run: python scripts/fetch_schedule.py
 
-def build_table():
-    rows = []
-    for team, path in TEAM_CSV.items():
-        match = load_next_match(path)
-        if match:
-            rows.append(
-                f"| {team} | {match['competition']} | {match['opponent']} | {match['date']} {match['time']} | {match['home_away']} | {match['status']} |"
-            )
-        else:
-            rows.append(f"| {team} | 无数据 | - | - | - | - |")
-    table = "\n".join(rows)
-    return (
-        "| 球队 | 赛事 | 对手 | 时间 | 主/客场 | 状态 |\n"
-        "|------|------|------|------|--------|------|\n"
-        + table
-    )
+      # 5️⃣ 生成 iPhone 可订阅的日历文件
+      - name: Build ICS calendar
+        run: python scripts/build_ics.py
 
+      # 6️⃣ 更新 README 仪表盘
+      - name: Update README
+        run: python scripts/update_readme.py
 
-def update_readme():
-    new_table = build_table()
-    content = f"""# ⚽ 自动更新足球赛程订阅日历
-
-本项目会每日凌晨自动同步成都蓉城与国际米兰最新赛程信息，并生成 iPhone 可订阅日历文件。
-
-## 📅 最新赛程预览（自动更新）
-
-{new_table}
-
----
-> 更新时间：{datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
-"""
-    with open(README_PATH, "w", encoding="utf-8") as f:
-        f.write(content)
-    print("✅ README.md 已更新。")
-
-
-if __name__ == "__main__":
-    update_readme()
+      # 7️⃣ 提交更新内容
+      - name: Commit and push updates
+        run: |
+          git config user.name 'github-actions'
+          git config user.email 'actions@users.noreply.github.com'
+          git add data/ calendar.ics README.md
+          if git diff --cached --quiet; then
+            echo "📭 无需更新"
+          else
+            git commit -m "自动更新赛程与日历 ⏰ $(date '+%Y-%m-%d %H:%M:%S')"
+            git push
+          fi
 
