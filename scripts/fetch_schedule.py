@@ -68,7 +68,7 @@ CST = ZoneInfo("Asia/Shanghai")
 PAST_DAYS, FUTURE_DAYS = 30, 365
 FIELDS = ["date", "time_local", "opponent", "home_away", "competition", "stadium", "status"]
 
-# ===================== 小工具 =====================
+# ===================== 工具 =====================
 def save_debug(path: str, content: str | bytes):
     os.makedirs(os.path.dirname(path), exist_ok=True)
     mode = "wb" if isinstance(content, (bytes, bytearray)) else "w"
@@ -138,7 +138,7 @@ def parse_dqd_html(html: str) -> List[Dict]:
             except Exception:
                 pass
 
-    # 兜底：找小 JSON 块
+    # 兜底：找包含关键字段的小 JSON
     found = []
     for s in re.findall(r"\{[^{}]*\}", html):
         if all(k in s for k in ["start_play", "home_name", "away_name"]):
@@ -150,28 +150,19 @@ def parse_dqd_html(html: str) -> List[Dict]:
         print(f"🔎 DQD HTML 兜底提取 {len(found)} 条")
     return found
 
-# ===================== 直播吧：网页表格解析 =====================
+# ===================== 直播吧：网页表格解析（尽量宽松） =====================
 def strip_tags(x: str) -> str:
     return re.sub(r"<[^>]+>", "", x or "").strip()
 
 def parse_zb8_html(html: str, team_name: str) -> List[Dict]:
-    """
-    直播吧 data 站的 team.html 通常是表格结构：
-    日期/时间/赛事/主队/比分/客队/…  这里用正则提取 <tr> 行→<td> 列，尽量宽松兼容。
-    """
     rows: List[Dict] = []
-
-    # 逐行提取 <tr>…</tr>
     for tr in re.findall(r"<tr[^>]*>(.*?)</tr>", html, flags=re.S | re.I):
         tds = re.findall(r"<td[^>]*>(.*?)</td>", tr, flags=re.S | re.I)
         if len(tds) < 5:
             continue
-
-        # 粗略列位：日期、时间/赛事、主队、比分、客队（不同模板会有偏移，这里做容错）
         raw = [strip_tags(td) for td in tds]
         text = " | ".join(raw)
 
-        # 抓日期/时间（YYYY-MM-DD, HH:MM）
         m_date = re.search(r"(\d{4}-\d{1,2}-\d{1,2})", text)
         m_time = re.search(r"(\d{1,2}:\d{2})", text)
         if not m_date:
@@ -179,47 +170,35 @@ def parse_zb8_html(html: str, team_name: str) -> List[Dict]:
         date = m_date.group(1)
         time_local = m_time.group(1) if m_time else "20:00"
 
-        # 主队/客队（在一行里找最像球队名的两个词）
-        # 先尝试常规布局： … | 主队 | 比分 | 客队 |
+        # 常规： … | 主队 | 比分 | 客队 |
         home, away = None, None
         if len(raw) >= 5:
             home = raw[-3]
             away = raw[-1]
-        # 回退：在整行里定位 team_name 出现位置，左右各取一个近似队名
-        if team_name not in (home or "") and team_name not in (away or ""):
-            # 简化：如果整行包含 team_name，就把另一个当对手
+
+        if not home or not away:
+            # 行里没有明确主客，再用包含队名的候选兜底
             if team_name in text:
-                # 从可能的队名列中挑选
                 candidates = [w for w in raw if 1 <= len(w) <= 20]
-                # 选一个非 team_name 的作为 opponent
                 opponent = None
                 for w in candidates:
                     if team_name not in w and re.search(r"[\u4e00-\u9fa5A-Za-z]", w):
                         opponent = w
                         break
                 if opponent:
-                    # 无法判断主客，就默认“未知→按客场处理”
-                    home_away = "Home" if random.random() < 0.5 else "Away"
-                    comp = ""
-                    stadium = ""
                     rows.append({
                         "date": date, "time_local": time_local,
-                        "opponent": opponent, "home_away": home_away,
-                        "competition": comp, "stadium": stadium, "status": ""
+                        "opponent": opponent, "home_away": "Away",
+                        "competition": "", "stadium": "", "status": ""
                     })
-                continue
-
-        if not home or not away:
             continue
 
-        # 赛事
         comp = ""
         for cell in raw:
             if "杯" in cell or "甲" in cell or "联" in cell or "超" in cell:
                 comp = cell
                 break
 
-        # 判断主客
         if team_name in home:
             opponent = away
             home_away = "Home"
@@ -227,7 +206,6 @@ def parse_zb8_html(html: str, team_name: str) -> List[Dict]:
             opponent = home
             home_away = "Away"
         else:
-            # 行里没有该队名，跳过
             continue
 
         rows.append({
@@ -239,9 +217,8 @@ def parse_zb8_html(html: str, team_name: str) -> List[Dict]:
     print(f"🔎 ZB8 HTML 解析 {len(rows)} 条")
     return rows
 
-# ===================== 归一化（DQD来源） =====================
+# ===================== DQD 归一化 =====================
 def normalize_row(item: Dict, team_name: str) -> Dict | None:
-    # 时间
     ts = None
     if isinstance(item.get("start_play"), (int, float)):
         ts = int(item["start_play"])
@@ -259,7 +236,6 @@ def normalize_row(item: Dict, team_name: str) -> Dict | None:
         return None
     dt = datetime.fromtimestamp(ts, tz=CST)
 
-    # 主客判断
     home = item.get("home_name") or item.get("home") or ""
     away = item.get("away_name") or item.get("away") or ""
     is_home = item.get("is_home")
@@ -337,7 +313,7 @@ def fetch_team(team_key: str, api_id: str | None, dqd_page: str | None, zb8_page
             save_debug(f"data/debug_{team_key}_zb8.html", zr.text[:200000].encode("utf-8", "ignore"))
             zb8_rows = parse_zb8_html(zr.text, team_name)
 
-    # 若抓到的是 DQD 结构，继续归一化；若是 ZB8 行则直接用
+    # 归一化与选择
     rows: List[Dict] = []
     if raw_list:
         for it in raw_list:
@@ -347,7 +323,6 @@ def fetch_team(team_key: str, api_id: str | None, dqd_page: str | None, zb8_page
             if not (start <= row["_dt"] <= end):
                 continue
             rows.append(row)
-        # 去掉内部字段
         for r0 in rows:
             r0.pop("_dt", None)
     else:
@@ -401,4 +376,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-    
