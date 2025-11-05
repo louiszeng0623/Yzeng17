@@ -3,7 +3,7 @@ name: Update Football Calendar (Full Auto Version)
 on:
   schedule:
     - cron: '0 20 * * *'   # 每天 UTC 20:00 = 北京时间 04:00
-  workflow_dispatch:
+  workflow_dispatch:       # 可手动运行
   push:
     paths:
       - 'scripts/*.py'
@@ -16,28 +16,39 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
+      # 1) 拉代码
       - uses: actions/checkout@v3
 
+      # 2) Python
       - uses: actions/setup-python@v4
         with:
           python-version: '3.10'
 
+      # 3) 依赖
       - name: Install dependencies
         run: pip install requests
 
+      # 4) 抓赛程
       - name: Fetch latest schedules
         run: python scripts/fetch_schedule.py
 
+      # 5) 生成 ICS
       - name: Build ICS calendar
         run: python scripts/build_ics.py
 
+      # 6) 更新 README
       - name: Update README
         run: python scripts/update_readme.py
 
+      # 7) 提交并推送（先拉取避免 non fast-forward）
       - name: Commit and push updates
         run: |
           git config user.name 'github-actions'
           git config user.email 'actions@users.noreply.github.com'
+
+          git fetch origin main
+          git pull --rebase origin main || true
+
           git add data/ calendar.ics README.md
           if git diff --cached --quiet; then
             echo "📭 无需更新"
