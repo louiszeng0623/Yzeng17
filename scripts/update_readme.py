@@ -9,7 +9,7 @@ TEAM_FILES = {
 }
 README = "README.md"
 
-def next_match(csv_path: str):
+def next_match(csv_path):
     try:
         with open(csv_path, encoding="utf-8") as f:
             r = csv.DictReader(f)
@@ -19,11 +19,11 @@ def next_match(csv_path: str):
                     when = datetime.strptime(f"{row['date']} {row['time_local']}", "%Y-%m-%d %H:%M")
                     if when > now:
                         return {
-                            "competition": row.get("competition", ""),
-                            "opponent": row.get("opponent", ""),
+                            "competition": row.get("competition",""),
+                            "opponent": row.get("opponent",""),
                             "when": when.strftime("%m-%d %H:%M"),
-                            "venue": "主场" if row.get("home_away") == "Home" else "客场",
-                            "status": row.get("status", ""),
+                            "venue": "主场" if row.get("home_away")=="Home" else "客场",
+                            "status": row.get("status",""),
                         }
                 except Exception:
                     continue
@@ -38,10 +38,10 @@ def build_table():
     ]
     for team, path in TEAM_FILES.items():
         m = next_match(path)
-        if m:
-            lines.append(f"| {team} | {m['competition']} | {m['opponent']} | {m['when']} | {m['venue']} | {m['status']} |")
-        else:
+        if not m:
             lines.append(f"| {team} | - | - | - | - | - |")
+        else:
+            lines.append(f"| {team} | {m['competition']} | {m['opponent']} | {m['when']} | {m['venue']} | {m['status']} |")
     return "\n".join(lines)
 
 def main():
@@ -61,4 +61,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-    
