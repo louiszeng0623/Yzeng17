@@ -1,14 +1,26 @@
-# GitHub iPhone 日历订阅（成都蓉城 & 国际米兰）
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+from pathlib import Path
 
-- 📅 订阅链接（直接粘贴到 iPhone「设置 → 日历 → 账户 → 添加订阅的日历」）  
-  `https://louiszeng0623.github.io/Yzeng17/calendar.ics`
+# 你当前仓库的 Pages 访问路径是 用户名.github.io/仓库名/
+# 为了稳妥，这里直接写死成你的仓库地址；如果以后换仓库名再改这里即可。
+ICS_URL = "https://louiszeng0623.github.io/Yzeng17/calendar.ics"
 
-- 📊 当前赛程条数：  
-  - 成都蓉城：**0**  
-  - 国际米兰：**0**
+README = Path("README.md")
 
-- 🔄 自动更新：每天北京时间 04:00 爬取（直播吧 → 懂球帝网页 → 懂球帝 API），失败会保留上一版数据。
+lines = []
+lines.append("# GitHub iPhone 日历（自动更新）\n")
+lines.append("- 覆盖：**成都蓉城**、**国际米兰**（中超/亚冠、意甲/欧冠/杯赛）\n")
+lines.append("- 北京时间统一显示（Asia/Shanghai）\n")
+lines.append("- 每天 **04:00** 自动更新\n")
+lines.append("\n")
+lines.append("**iPhone 订阅：** 设置 → 日历 → 账户 → 添加订阅的日历 → 粘贴：\n")
+lines.append("\n```\n")
+lines.append(ICS_URL + "\n")
+lines.append("```\n\n")
+lines.append("如果出现 404：到仓库 **Settings → Pages** 开启 Pages，Source 选 `Deploy from a branch`，分支选 `main /(root)`。\n")
 
-- 🌐 在线预览主页：https://louiszeng0623.github.io/Yzeng17
+content = "".join(lines)
 
-> 如果你想增加球队，只需在 `scripts/fetch_schedule.py` 的 `TEAMS` 里按同样格式新增一个条目即可。
+README.write_text(content, encoding="utf-8")
+print("✅ 更新 README.md 完成")
