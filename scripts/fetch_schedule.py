@@ -1,86 +1,84 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""
-自动从懂球帝 v3 API 获取 成都蓉城 & 国际米兰 的未来赛程
-生成 CSV 并供 build_ics.py 使用
-作者：Louis Zeng 自动日历系统 (基于懂球帝 JSON API)
-"""
-
-import requests, csv
+import requests
+import csv
 from datetime import datetime
-from zoneinfo import ZoneInfo
 
-HEADERS = {"User-Agent": "Mozilla/5.0 (Louis-Auto-Calendar)"}
-CST = ZoneInfo("Asia/Shanghai")
-
-# ✅ 懂球帝球队ID（已确认）
-TEAMS = {
-    "chengdu": {"id": 50016554, "name": "成都蓉城"},
-    "inter": {"id": 50001752, "name": "国际米兰"}
+# === 配置 ===
+HEADERS = {
+    "User-Agent": "dongqiudiApp/7.0.6 (iPhone; iOS 17.0.1; Scale/3.00)",
+    "Referer": "https://m.dongqiudi.com/",
+    "Accept-Encoding": "gzip, deflate, br",
 }
 
-def fetch_team_schedule(team_id: int, team_name: str):
-    """从懂球帝v3 API获取指定球队的未来赛程"""
-    url = f"https://api.dongqiudi.com/v3/team/schedule/list?team_id={team_id}"
-    print(f"📡 正在抓取 {team_name} 赛程...")
-    r = requests.get(url, headers=HEADERS, timeout=25)
-    r.raise_for_status()
-    data = r.json()
+TEAMS = {
+    "chengdu": {
+        "id": "50001752",
+        "name": "成都蓉城",
+        "csv": "data/chengdu.csv",
+    },
+    "inter": {
+        "id": "50000457",
+        "name": "国际米兰",
+        "csv": "data/inter.csv",
+    },
+}
 
-    matches = data.get("data", {}).get("matches", [])
-    if not matches:
-        print(f"⚠️ API 未返回 {team_name} 的比赛数据: {url}")
-        return []
+API_URL = "https://api.dongqiudi.com/v3/team/schedule/list?team_id={team_id}"
 
-    games = []
-    now = datetime.now(CST)
-    for match in matches:
+
+def fetch_team_schedule(team_id: str, team_name: str):
+    """获取懂球帝球队赛程"""
+    url = API_URL.format(team_id=team_id)
+    print(f"正在获取 {team_name} 的赛程数据...")
+    resp = requests.get(url, headers=HEADERS, timeout=15)
+    resp.raise_for_status()
+    data = resp.json()
+
+    matches = []
+    for item in data.get("data", []):
         try:
-            t = datetime.fromisoformat(match["match_time"]).astimezone(CST)
-            if t < now:
-                continue  # 只保留未来比赛
-            comp = match.get("competition_name", "")
-            home = match.get("home_name", "")
-            away = match.get("away_name", "")
-            opponent = away if home == team_name else home
-            home_away = "Home" if home == team_name else "Away"
-            stadium = match.get("stadium", "")
-            games.append({
-                "date": t.strftime("%Y-%m-%d"),
-                "time_local": t.strftime("%H:%M"),
-                "opponent": opponent,
-                "home_away": home_away,
-                "competition": comp,
-                "stadium": stadium
-            })
+            match_time = datetime.fromtimestamp(item["start_play"])
+            date_str = match_time.strftime("%Y-%m-%d")
+            time_str = match_time.strftime("%H:%M")
+            opponent = item["away_name"] if item["is_home"] else item["home_name"]
+            home_away = "Home" if item["is_home"] else "Away"
+            competition = item.get("competition_name", "")
+            stadium = item.get("stadium_name", "")
+            matches.append(
+                {
+                    "date": date_str,
+                    "time_local": time_str,
+                    "opponent": opponent,
+                    "home_away": home_away,
+                    "competition": competition,
+                    "stadium": stadium,
+                }
+            )
         except Exception as e:
-            print("解析错误:", e)
-    print(f"✅ {team_name} 共获取到 {len(games)} 场未来比赛")
-    return games
+            print(f"解析错误: {e}")
 
-def write_csv(path, rows):
-    """写入 CSV 文件"""
-    fieldnames = ["date", "time_local", "opponent", "home_away", "competition", "stadium"]
-    with open(path, "w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=fieldnames)
+    print(f"{team_name} 共获取 {len(matches)} 场比赛。")
+    return matches
+
+
+def save_to_csv(matches, csv_path):
+    """保存为 CSV 文件"""
+    with open(csv_path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(
+            f,
+            fieldnames=["date", "time_local", "opponent", "home_away", "competition", "stadium"],
+        )
         writer.writeheader()
-        writer.writerows(rows)
-    print(f"💾 写入 {path} ({len(rows)} 场比赛)")
+        writer.writerows(matches)
+    print(f"✅ 已保存至 {csv_path}")
+
 
 def main():
-    all_ok = True
-    for key, info in TEAMS.items():
-        try:
-            rows = fetch_team_schedule(info["id"], info["name"])
-            if not rows:
-                print(f"⚠️ 未抓到 {info['name']} 的数据")
-                all_ok = False
-            write_csv(f"data/{key}.csv", rows)
-        except Exception as e:
-            print(f"❌ 抓取 {info['name']} 失败: {e}")
-            all_ok = False
-    if all_ok:
-        print("🎯 全部数据更新完毕，可生成 calendar.ics")
+    for key, team in TEAMS.items():
+        matches = fetch_team_schedule(team["id"], team["name"])
+        save_to_csv(matches, team["csv"])
+
 
 if __name__ == "__main__":
     main()
