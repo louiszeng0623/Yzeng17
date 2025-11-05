@@ -27,7 +27,7 @@ jobs:
         run: |
           python3 << 'EOF'
           from playwright.sync_api import sync_playwright
-          import pandas as pd, time
+          import pandas as pd
 
           teams = [
               ("chengdu", "https://data.zhibo8.cc/html/team.html?match=&team=%E6%88%90%E9%83%BD%E8%93%89%E5%9F%8E"),
@@ -38,15 +38,15 @@ jobs:
               with sync_playwright() as p:
                   browser = p.chromium.launch(headless=True)
                   page = browser.new_page()
-                  page.goto(url)
+                  page.goto(url, wait_until="networkidle")
 
-                  # 点击赛程 Tab
+                  # 点击「赛程」tab
                   page.click("text=赛程")
 
-                  # 等待赛程表加载并且可见
-                  page.wait_for_selector("table.table-lists tbody tr", timeout=60000)
+                  # 等待所有 AJAX 加载结束（最关键一行）
+                  page.wait_for_load_state("networkidle")
 
-                  # 抓可见的赛程表
+                  # 抓可见的赛程表（避免抓到 display:none 的）
                   table = page.query_selector("table.table-lists:not([style*='display: none'])")
                   rows = table.query_selector_all("tbody tr")
 
@@ -58,9 +58,10 @@ jobs:
 
                   df = pd.DataFrame(data, columns=["日期", "时间", "赛事", "主队", "客队"])
                   df.to_csv(f"data/{filename}.csv", index=False, encoding="utf-8-sig")
+
                   browser.close()
 
-          print("✅ 赛程抓取成功（可见表格）")
+          print("✅ 成功：赛程已经正确抓取并写入 CSV")
           EOF
 
       - name: Commit and push
@@ -70,3 +71,4 @@ jobs:
           git add data/*.csv || true
           git commit -m "Auto update schedule" || true
           git push
+
