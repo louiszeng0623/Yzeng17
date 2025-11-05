@@ -20,7 +20,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install requests pandas playwright
+          pip install pandas playwright
           playwright install chromium
 
       - name: Fetch schedule (Playwright)
@@ -34,34 +34,38 @@ jobs:
               ("inter", "https://data.zhibo8.cc/html/team.html?match=&team=%E5%9B%BD%E9%99%85%E7%B1%B3%E5%85%B0"),
           ]
 
-          for filename, url in teams:
-              with sync_playwright() as p:
-                  browser = p.chromium.launch(headless=True)
-                  page = browser.new_page()
+          with sync_playwright() as p:
+              browser = p.chromium.launch(headless=True)
+              page = browser.new_page()
+
+              for filename, url in teams:
                   page.goto(url, wait_until="networkidle")
 
-                  # 点击「赛程」tab
+                  # 点击“赛程”tab
                   page.click("text=赛程")
-
-                  # 等待所有 AJAX 加载结束（最关键一行）
                   page.wait_for_load_state("networkidle")
 
-                  # 抓可见的赛程表（避免抓到 display:none 的）
+                  # 选中可见的赛程表
                   table = page.query_selector("table.table-lists:not([style*='display: none'])")
                   rows = table.query_selector_all("tbody tr")
 
                   data = []
                   for row in rows:
                       cols = [c.inner_text().strip() for c in row.query_selector_all("td")]
-                      if len(cols) >= 5:
-                          data.append(cols[:5])
+                      if len(cols) >= 7:
+                          date_time = cols[0]
+                          home = cols[1]
+                          league = cols[3]
+                          score = cols[4]
+                          away = cols[6]
+                          data.append([date_time, league, home, score, away])
 
-                  df = pd.DataFrame(data, columns=["日期", "时间", "赛事", "主队", "客队"])
+                  df = pd.DataFrame(data, columns=["日期时间", "赛事", "主队", "比分", "客队"])
                   df.to_csv(f"data/{filename}.csv", index=False, encoding="utf-8-sig")
 
-                  browser.close()
+              browser.close()
 
-          print("✅ 成功：赛程已经正确抓取并写入 CSV")
+          print("✅ 成功：成都蓉城 & 国际米兰 赛程已更新")
           EOF
 
       - name: Commit and push
