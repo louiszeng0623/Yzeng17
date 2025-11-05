@@ -48,7 +48,11 @@ for cal in [chengdu, inter]:
     if cal is not None:
         calendar_all.events.update(cal.events)
 
+# 给日历命名（iOS / Mac / Google 日历都会显示）
+calendar_all.extra.append(("X-WR-CALNAME", "Louis_Zeng"))
+calendar_all.extra.append(("X-WR-TIMEZONE", "Asia/Shanghai"))
+
 with open("calendar.ics", "w", encoding="utf-8") as f:
     f.writelines(calendar_all)
 
-print("🎉 已合并生成总日历 → calendar.ics")
+print("🎉 已合并生成总日历 → calendar.ics（日历名称：Louis_Zeng）")
