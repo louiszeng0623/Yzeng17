@@ -1,45 +1,48 @@
 import requests
-import pandas as pd
-from bs4 import BeautifulSoup
+import csv
+from datetime import datetime
 
-def fetch_schedule(team_name, url, output_csv):
-    print(f"正在抓取 {team_name} 赛程...")
+TEAMS = {
+    "chengdu": {
+        "name": "成都蓉城",
+        "id": "50076899"
+    },
+    "inter": {
+        "name": "国际米兰",
+        "id": "50001042"
+    }
+}
 
-    r = requests.get(url, headers={"User-Agent": "Mozilla/5.0"})
-    r.encoding = "utf-8"
-    soup = BeautifulSoup(r.text, "html.parser")
+def fetch_match(team_key):
+    team = TEAMS[team_key]
+    url = f"https://api.dongqiudi.com/data/v1/team/match/{team['id']}/schedule"
+    r = requests.get(url, timeout=10).json()
 
-    table = soup.find("table")
-    if table is None:
-        print(f"❌ 未找到赛程表，请检查网址: {url}")
-        return
+    matches = []
+    for m in r.get("matchSchedule", []):
+        try:
+            dt = datetime.fromtimestamp(m["matchTime"]).strftime("%Y-%m-%d %H:%M")
+            home = m["homeTeam"]["name"]
+            away = m["awayTeam"]["name"]
+            comp = m["competitionName"]
+            score = m.get("fullScore", "")
+            matches.append([dt, comp, home, score, away])
+        except:
+            continue
+    return matches
 
-    rows = []
-    for tr in table.find_all("tr")[1:]:
-        tds = [td.get_text(strip=True) for td in tr.find_all("td")]
-        if len(tds) >= 7:
-            date, time, comp, home, score, away, _round = tds[0], tds[1], tds[2], tds[3], tds[4], tds[5], tds[6]
+def save_csv(team_key):
+    team = TEAMS[team_key]
+    filename = f"data/{team_key}.csv"
+    rows = fetch_match(team_key)
 
-            # 仅保留 VS 格式（便于日历显示）
-            match = f"{home} vs {away}" if "VS" in score.upper() else f"{home} {score} {away}"
+    with open(filename, "w", newline="", encoding="utf-8-sig") as f:
+        writer = csv.writer(f)
+        writer.writerow(["时间", "赛事", "主队", "比分", "客队"])
+        writer.writerows(rows)
 
-            rows.append([f"{date} {time}", comp, home, away, match])
+    print(f"{team['name']} ✅ CSV 更新成功 → {filename}")
 
-    df = pd.DataFrame(rows, columns=["日期时间", "赛事", "主队", "客队", "对阵"])
-    df.to_csv(output_csv, index=False, encoding="utf-8-sig")
+save_csv("chengdu")
+save_csv("inter")
 
-    print(f"✅ {team_name} 赛程已保存至 {output_csv}")
-
-# 成都蓉城
-fetch_schedule(
-    "成都蓉城",
-    "https://www.dongqiudi.com/team/50076899.html",
-    "data/chengdu.csv"
-)
-
-# 国际米兰
-fetch_schedule(
-    "国际米兰",
-    "https://www.dongqiudi.com/team/50001042.html",
-    "data/inter.csv"
-)
