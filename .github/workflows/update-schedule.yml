@@ -2,7 +2,7 @@ name: Update Football Calendar (Full Auto Version)
 
 on:
   schedule:
-    - cron: '0 20 * * *'   # 每天 UTC 20:00（北京时间次日 04:00）
+    - cron: '0 20 * * *'   # 每天 UTC 20:00（北京时间 04:00）
   workflow_dispatch:
   push:
     paths:
@@ -25,7 +25,8 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install -U requests beautifulsoup4 lxml pytz
+          pip install -U requests beautifulsoup4 lxml pytz playwright
+          python -m playwright install --with-deps chromium
 
       - name: Fetch latest schedules
         run: python scripts/fetch_schedule.py
