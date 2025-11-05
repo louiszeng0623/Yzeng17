@@ -34,8 +34,8 @@ def build_headers() -> Dict[str, str]:
 
 # ---------------- 队伍配置（ID 已校正） ----------------
 TEAMS = {
-    "chengdu": {"id": "50016554", "name": "成都蓉城", "csv": "data/chengdu.csv"},
-    "inter":   {"id": "50001752", "name": "国际米兰", "csv": "data/inter.csv"},
+    "chengdu": {"id": "50076899", "name": "成都蓉城", "csv": "data/chengdu.csv"},
+    "inter":   {"id": "50001042", "name": "国际米兰", "csv": "data/inter.csv"},
 }
 
 API_URL = "https://api.dongqiudi.com/v3/team/schedule/list?team_id={team_id}"
