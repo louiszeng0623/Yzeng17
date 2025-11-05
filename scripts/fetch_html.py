@@ -1,5 +1,6 @@
 from playwright.sync_api import sync_playwright
 import pandas as pd
+import time
 
 TEAMS = {
     "chengdu": {
@@ -13,14 +14,22 @@ TEAMS = {
 }
 
 def scrape(team_key, config, page):
-    page.goto(config["url"])
-    page.click("text=赛程")
+    page.goto(config["url"], timeout=60000)
+    page.wait_for_timeout(2000)
+
+    # 切换到赛程页面
+    page.locator("text=赛程").click()
+    page.wait_for_timeout(1500)
+
+    # 等待赛程表加载
+    page.wait_for_selector("table tr", timeout=15000)
 
     rows = page.locator("table tr").all()
     data = []
 
-    for row in rows[1:]:
+    for row in rows[1:]:  # 跳过标题行
         cells = row.locator("td").all()
+
         if len(cells) < 5:
             continue
 
@@ -30,8 +39,7 @@ def scrape(team_key, config, page):
         score = cells[3].inner_text().strip()
         away = cells[4].inner_text().strip()
 
-        # 判断是否为本队主场
-        stadium = config["home"] if team_key in home else f"{away} 主场"
+        stadium = config["home"] if home.__contains__("成都") or home.__contains__("国际米兰") else f"{away} 主场"
 
         data.append([date, match, home, score, away, stadium])
 
