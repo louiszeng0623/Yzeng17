@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-import csv, uuid
+import csv, uuid, os
 from datetime import datetime, timedelta
 
 TIMEZONE_NAME = "Asia/Shanghai"
@@ -8,10 +8,16 @@ UTC_OFFSET = "+0800"
 
 def load_events(csv_file: str, team_name: str):
     events = []
+    if not os.path.exists(csv_file):
+        print(f"🚫 跳过（不存在）：{csv_file}")
+        return events
     with open(csv_file, newline='', encoding='utf-8') as f:
         reader = csv.DictReader(f)
         for row in reader:
-            dt_local = datetime.strptime(f"{row['date']} {row['time_local']}", "%Y-%m-%d %H:%M")
+            try:
+                dt_local = datetime.strptime(f"{row['date']} {row['time_local']}", "%Y-%m-%d %H:%M")
+            except Exception:
+                continue
             dt_end = dt_local + timedelta(hours=2)
             opponent = row['opponent']
             home = row['home_away'] == 'Home'
@@ -22,12 +28,9 @@ def load_events(csv_file: str, team_name: str):
             summary = f"{team_name} vs {opponent}" if home else f"{opponent} vs {team_name}"
             if status:
                 summary += f" {status}"
-
-            desc = f"{comp} | {'主场' if home else '客场'}比赛"
-            if stadium:
-                desc += f" | {stadium}"
-            if status:
-                desc += f" | 状态: {status}"
+            desc = f"{comp} | {'主场' if home else '客场'}"
+            if stadium: desc += f" | {stadium}"
+            if status:  desc += f" | 状态: {status}"
 
             events.append({
                 "uid": uuid.uuid4().hex,
@@ -48,7 +51,6 @@ def build_calendar(events, outfile="calendar.ics"):
         f"X-WR-TIMEZONE:{TIMEZONE_NAME}",
         "PRODID:-//football-fixtures//CN"
     ]
-    # 为了稳定，按时间排序输出
     events.sort(key=lambda e: (e['start'], e['summary']))
     now_utc_str = datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
     for e in events:
@@ -66,7 +68,7 @@ def build_calendar(events, outfile="calendar.ics"):
     lines.append("END:VCALENDAR")
     with open(outfile,'w',encoding='utf-8') as f:
         f.write("\n".join(lines))
-    print(f"Wrote {outfile} with {len(events)} events.")
+    print(f"🧱 Wrote {outfile} with {len(events)} events.")
 
 if __name__=="__main__":
     ev=[]
