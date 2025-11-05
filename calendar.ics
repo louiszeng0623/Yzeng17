@@ -2,5 +2,5 @@ BEGIN:VCALENDAR
 VERSION:2.0
 CALSCALE:GREGORIAN
 X-WR-TIMEZONE:Asia/Shanghai
-PRODID:-//football-fixtures-2025//EN
+PRODID:-//football-fixtures//CN
 END:VCALENDAR
