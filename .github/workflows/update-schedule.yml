@@ -1,48 +1,40 @@
-name: Update Football Calendar (Full Auto Version)
-
-on:
-  schedule:
-    - cron: '0 20 * * *'   # 每天 UTC 20:00（北京时间 04:00）
-  workflow_dispatch:
-  push:
-    paths:
-      - 'scripts/**'
-      - 'data/**'
-      - '.github/workflows/update-schedule.yml'
-
-permissions:
-  contents: write
-
-jobs:
-  build:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v3
-
-      - uses: actions/setup-python@v4
-        with:
-          python-version: '3.10'
-
-      - name: Install dependencies
+      - name: Fetch schedule (Playwright)
         run: |
-          pip install -U requests beautifulsoup4 lxml pytz playwright
-          python -m playwright install --with-deps chromium
+          python3 << 'EOF'
+          from playwright.sync_api import sync_playwright
+          import pandas as pd
+          
+          teams = [
+              ("成都蓉城", "https://data.zhibo8.cc/html/team.html?match=&team=%E6%88%90%E9%83%BD%E8%93%89%E5%9F%8E"),
+              ("国际米兰", "https://data.zhibo8.cc/html/team.html?match=&team=%E5%9B%BD%E9%99%85%E7%B1%B3%E5%85%B0"),
+          ]
 
-      - name: Fetch latest schedules
-        run: python scripts/fetch_schedule.py
+          for name, url in teams:
+              with sync_playwright() as p:
+                  browser = p.chromium.launch(headless=True)
+                  page = browser.new_page()
+                  page.set_default_navigation_timeout(60000)
 
-      - name: Build ICS calendar
-        run: python scripts/build_ics.py
+                  # 打开球队页面
+                  page.goto(url)
 
-      - name: Update README
-        run: python scripts/update_readme.py
+                  # 点击“赛程”标签（中文网站就是这么写的）
+                  page.click("text=赛程")
 
-      - name: Commit and push updates (safe pull)
-        run: |
-          git config user.name 'github-actions'
-          git config user.email 'actions@github.com'
-          git fetch origin main
-          git add data/ calendar.ics README.md
-          git commit -m "自动更新赛程 ⏰ $(date '+%Y-%m-%d %H:%M:%S')" || true
-          git pull --rebase origin main || true
-          git push origin HEAD:main
+                  # 等待赛程表渲染
+                  page.wait_for_selector("table")
+
+                  # 抓赛程表格
+                  rows = page.query_selector_all("table tr")[1:]  # 跳过表头
+                  data = []
+                  for row in rows:
+                      cols = [c.inner_text().strip() for c in row.query_selector_all("td")]
+                      if len(cols) >= 5:
+                          data.append(cols[:5])
+
+                  df = pd.DataFrame(data, columns=["日期", "时间", "赛事", "主队", "客队"])
+                  df.to_csv(f"data/{name}.csv", index=False, encoding="utf-8-sig")
+                  browser.close()
+
+          print("✅ Playwright 赛程获取成功！")
+          EOF
