@@ -2,7 +2,7 @@ name: Update Football Calendar (Full Auto Version)
 
 on:
   schedule:
-    - cron: "0 */6 * * *"   # 每6小时自动更新
+    - cron: "0 */6 * * *"
   workflow_dispatch:
 
 jobs:
@@ -51,24 +51,18 @@ jobs:
                   data = []
                   for row in rows:
                       tds = row.query_selector_all("td")
-                      if len(tds) < 7: continue
+                      if len(tds) < 7:
+                          continue
                       cols = [c.inner_text().strip() for c in tds]
-                      date_time = cols[0]
-                      home      = cols[1]
-                      league    = cols[3]
-                      score     = cols[4]
-                      away      = cols[6]
-                      data.append([date_time, league, home, score, away])
+                      data.append([cols[0], cols[3], cols[1], cols[4], cols[6]])
 
                   df = pd.DataFrame(data, columns=["日期时间","赛事","主队","比分","客队"])
                   df.to_csv(f"data/{filename}.csv", index=False, encoding="utf-8-sig")
 
               browser.close()
-
-          print("✅ CSV 已生成：data/chengdu.csv, data/inter.csv")
           EOF
 
-      - name: Convert CSV to ICS and publish
+      - name: Convert CSV to ICS + build docs
         run: |
           python3 << 'EOF'
           import csv, os, re, datetime as dt
@@ -82,68 +76,53 @@ jobs:
               ("data/inter.csv",   "国际米兰赛程"),
           ]
 
-          def guess_year(month):
-              if month < (now.month - 6):
-                  return now.year + 1
-              return now.year
-
-          def parse_dt(s):
-              s = s.strip()
-              m = re.match(r"^(\d{2})-(\d{2})\s+(\d{2}):(\d{2})$", s)
+          def parse_time(s):
+              m = re.match(r"(\d{2})-(\d{2}) (\d{2}):(\d{2})", s)
               if not m: return None
-              mm, dd, HH, MM = map(int, m.groups())
-              return dt.datetime(guess_year(mm), mm, dd, HH, MM)
+              mm, dd, hh, mi = map(int, m.groups())
+              yyyy = now.year + (1 if mm < now.month - 6 else 0)
+              return dt.datetime(yyyy, mm, dd, hh, mi)
 
-          def ics_header():
-              return f"BEGIN:VCALENDAR\r\nVERSION:2.0\r\nX-WR-TIMEZONE:{TZ}\r\n"
-
-          def ics_footer():
-              return "END:VCALENDAR\r\n"
-
-          def vevent(start, title, desc, uid):
-              stamp = dt.datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
-              dtstart = start.strftime("%Y%m%dT%H%M00")
+          def event(d, title, desc):
+              uid = f"{d.strftime('%Y%m%d%H%M')}-{desc}"
               return (
                   "BEGIN:VEVENT\r\n"
                   f"UID:{uid}\r\n"
-                  f"DTSTAMP:{stamp}\r\n"
-                  f"DTSTART;TZID={TZ}:{dtstart}\r\n"
+                  f"DTSTAMP:{dt.datetime.utcnow().strftime('%Y%m%dT%H%M%SZ')}\r\n"
+                  f"DTSTART;TZID={TZ}:{d.strftime('%Y%m%dT%H%M00')}\r\n"
                   f"SUMMARY:{title}\r\n"
                   f"DESCRIPTION:{desc}\r\n"
                   "END:VEVENT\r\n"
               )
 
-          outdir = Path("docs/calendar")
-          outdir.mkdir(parents=True, exist_ok=True)
-
-          # ✅ 禁用 Jekyll
-          Path("docs/.nojekyll").write_text("")
+          docs = Path("docs")
+          cal = docs / "calendar"
+          cal.mkdir(parents=True, exist_ok=True)
+          (docs / ".nojekyll").write_text("")
 
           index = ["<h1>足球赛程订阅</h1><ul>"]
 
-          for src, calname in srcs:
+          for src, display in srcs:
               if not os.path.exists(src): continue
               events = []
               with open(src, encoding="utf-8") as f:
-                  reader = csv.DictReader(f)
-                  for row in reader:
-                      start = parse_dt(row["日期时间"])
-                      if not start: continue
+                  for row in csv.DictReader(f):
+                      d = parse_time(row["日期时间"])
+                      if not d: continue
                       title = f"{row['赛事']} | {row['主队']} vs {row['客队']}"
-                      desc = f"{row['主队']} {row['比分']} {row['客队']}"
-                      uid = f"{start.strftime('%Y%m%d%H%M')}-{row['主队']}-{row['客队']}@auto"
-                      events.append(vevent(start, title, desc, uid))
+                      desc  = f"{row['主队']} {row['比分']} {row['客队']}"
+                      events.append(event(d, title, desc))
 
-              ics = outdir / (Path(src).stem + ".ics")
-              with open(ics, "w", encoding="utf-8") as f:
-                  f.write(ics_header())
+              ics_file = cal / (Path(src).stem + ".ics")
+              with open(ics_file, "w", encoding="utf-8") as f:
+                  f.write(f"BEGIN:VCALENDAR\r\nX-WR-TIMEZONE:{TZ}\r\n")
                   for e in events: f.write(e)
-                  f.write(ics_footer())
+                  f.write("END:VCALENDAR\r\n")
 
-              index.append(f"<li><a href='calendar/{ics.name}'>{calname}</a></li>")
+              index.append(f"<li><a href='calendar/{ics_file.name}'>{display}</a></li>")
 
           index.append("</ul>")
-          Path("docs/index.html").write_text("\n".join(index), encoding="utf-8")
+          (docs / "index.html").write_text("\n".join(index), encoding="utf-8")
           EOF
 
       - name: Commit and push
@@ -151,5 +130,5 @@ jobs:
           git config user.name "Louis Zeng Bot"
           git config user.email "actions@github.com"
           git add data/*.csv docs/index.html docs/calendar/*.ics docs/.nojekyll || true
-          git commit -m "Auto update schedules & ICS" || true
+          git commit -m "Auto update CSV + ICS" || true
           git push
