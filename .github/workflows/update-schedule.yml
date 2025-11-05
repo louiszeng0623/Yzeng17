@@ -2,7 +2,7 @@ name: Update Football Calendar (Full Auto Version)
 
 on:
   schedule:
-    - cron: "0 */6 * * *"
+    - cron: "0 */6 * * *"   # 每 6 小时自动更新
   workflow_dispatch:
 
 jobs:
@@ -20,49 +20,40 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install pandas playwright
-          playwright install chromium
+          pip install pandas requests
 
-      - name: Fetch schedules (Playwright)
+      - name: Fetch schedules (Dongqiudi API - Stable)
         run: |
           python3 << 'EOF'
-          from playwright.sync_api import sync_playwright
-          import pandas as pd, os
+          import requests, pandas as pd, os
 
           os.makedirs("data", exist_ok=True)
 
           teams = [
-              ("chengdu", "https://data.zhibo8.cc/html/team.html?match=&team=%E6%88%90%E9%83%BD%E8%93%89%E5%9F%8E"),
-              ("inter",   "https://data.zhibo8.cc/html/team.html?match=&team=%E5%9B%BD%E9%99%85%E7%B1%B3%E5%85%B0"),
+              ("chengdu", 50076899),   # 成都蓉城
+              ("inter",   50001042),   # 国际米兰
           ]
 
-          with sync_playwright() as p:
-              browser = p.chromium.launch(headless=True)
-              page = browser.new_page()
+          for filename, tid in teams:
+              print(f"获取 {filename} 赛程中…")
+              url = f"https://api.dongqiudi.com/v3/team/schedule/list?team_id={tid}"
+              resp = requests.get(url).json()
 
-              for filename, url in teams:
-                  page.goto(url, wait_until="networkidle")
-                  page.click("text=赛程")
-                  page.wait_for_load_state("networkidle")
+              matches = []
+              for m in resp.get("data", []):
+                  date = m["match_time"][5:16]     # 05-02 19:35
+                  league = m["competition_name"]
+                  home = m["home_name"]
+                  away = m["away_name"]
+                  score = m["match_score"] or "vs"
+                  matches.append([date, league, home, score, away])
 
-                  table = page.query_selector("table.table-lists:not([style*='display: none'])")
-                  rows = table.query_selector_all("tbody tr")
-
-                  data = []
-                  for row in rows:
-                      tds = row.query_selector_all("td")
-                      if len(tds) < 7:
-                          continue
-                      cols = [c.inner_text().strip() for c in tds]
-                      data.append([cols[0], cols[3], cols[1], cols[4], cols[6]])
-
-                  df = pd.DataFrame(data, columns=["日期时间","赛事","主队","比分","客队"])
-                  df.to_csv(f"data/{filename}.csv", index=False, encoding="utf-8-sig")
-
-              browser.close()
+              df = pd.DataFrame(matches, columns=["日期时间","赛事","主队","比分","客队"])
+              df.to_csv(f"data/{filename}.csv", index=False, encoding="utf-8-sig")
+              print(f"✅ {filename} 成功，共 {len(df)} 场比赛")
           EOF
 
-      - name: Convert CSV to ICS + build docs
+      - name: Convert CSV to ICS + Build docs site
         run: |
           python3 << 'EOF'
           import csv, os, re, datetime as dt
@@ -83,39 +74,34 @@ jobs:
               yyyy = now.year + (1 if mm < now.month - 6 else 0)
               return dt.datetime(yyyy, mm, dd, hh, mi)
 
-          def event(d, title, desc):
-              uid = f"{d.strftime('%Y%m%d%H%M')}-{desc}"
-              return (
-                  "BEGIN:VEVENT\r\n"
-                  f"UID:{uid}\r\n"
-                  f"DTSTAMP:{dt.datetime.utcnow().strftime('%Y%m%dT%H%M%SZ')}\r\n"
-                  f"DTSTART;TZID={TZ}:{d.strftime('%Y%m%dT%H%M00')}\r\n"
-                  f"SUMMARY:{title}\r\n"
-                  f"DESCRIPTION:{desc}\r\n"
-                  "END:VEVENT\r\n"
-              )
-
           docs = Path("docs")
           cal = docs / "calendar"
           cal.mkdir(parents=True, exist_ok=True)
-          (docs / ".nojekyll").write_text("")
+
+          (docs / ".nojekyll").write_text("")   # 禁用 Jekyll
 
           index = ["<h1>足球赛程订阅</h1><ul>"]
 
           for src, display in srcs:
-              if not os.path.exists(src): continue
               events = []
               with open(src, encoding="utf-8") as f:
                   for row in csv.DictReader(f):
                       d = parse_time(row["日期时间"])
                       if not d: continue
-                      title = f"{row['赛事']} | {row['主队']} vs {row['客队']}"
-                      desc  = f"{row['主队']} {row['比分']} {row['客队']}"
-                      events.append(event(d, title, desc))
+                      uid = f"{d.strftime('%Y%m%d%H%M')}-{row['主队']}-{row['客队']}"
+                      events.append(
+                          "BEGIN:VEVENT\r\n"
+                          f"UID:{uid}\r\n"
+                          f"DTSTAMP:{dt.datetime.utcnow().strftime('%Y%m%dT%H%M%SZ')}\r\n"
+                          f"DTSTART;TZID={TZ}:{d.strftime('%Y%m%dT%H%M00')}\r\n"
+                          f"SUMMARY:{row['赛事']} | {row['主队']} vs {row['客队']}\r\n"
+                          f"DESCRIPTION:{row['主队']} {row['比分']} {row['客队']}\r\n"
+                          "END:VEVENT\r\n"
+                      )
 
               ics_file = cal / (Path(src).stem + ".ics")
               with open(ics_file, "w", encoding="utf-8") as f:
-                  f.write(f"BEGIN:VCALENDAR\r\nX-WR-TIMEZONE:{TZ}\r\n")
+                  f.write(f"BEGIN:VCALENDAR\r\nVERSION:2.0\r\nX-WR-TIMEZONE:{TZ}\r\n")
                   for e in events: f.write(e)
                   f.write("END:VCALENDAR\r\n")
 
@@ -127,8 +113,9 @@ jobs:
 
       - name: Commit and push
         run: |
-          git config user.name "Louis Zeng Bot"
+          git config user.name "Auto Calendar Bot"
           git config user.email "actions@github.com"
           git add data/*.csv docs/index.html docs/calendar/*.ics docs/.nojekyll || true
-          git commit -m "Auto update CSV + ICS" || true
+          git commit -m "Auto update schedules & ICS" || true
           git push
+
